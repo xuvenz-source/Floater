@@ -11,10 +11,13 @@ import java.util.Random;
 
 public class RapidTapAccessibilityService extends AccessibilityService {
     private static RapidTapAccessibilityService instance;
+    private static final long SMART_PAUSE_FALLBACK_MS = 300L;
+    private static final long SMART_PAUSE_END_DELAY_MS = 20L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
     private final Runnable tapRunnable = this::performNextTap;
+    private final Runnable smartPauseFallbackRunnable = this::resumeAfterUserTouch;
     private final GestureResultCallback tapCallback = new GestureResultCallback() {
         @Override
         public void onCompleted(GestureDescription gestureDescription) {
@@ -57,6 +60,10 @@ public class RapidTapAccessibilityService extends AccessibilityService {
         return gestureInFlight;
     }
 
+    public boolean isPausedForUserTouch() {
+        return pausedForUserTouch;
+    }
+
     public void startRapidTapping(
             int x,
             int y,
@@ -81,20 +88,31 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
         pausedForUserTouch = false;
         tapping = true;
+        handler.removeCallbacks(smartPauseFallbackRunnable);
         handler.post(tapRunnable);
     }
 
     public void pauseForUserTouch() {
         if (!tapping || pausedForUserTouch) return;
+
         pausedForUserTouch = true;
         handler.removeCallbacks(tapRunnable);
+
+        // Some Android 10/OEM combinations do not reliably deliver
+        // TYPE_TOUCH_INTERACTION_END to this kind of service. Keep that event as
+        // the preferred fast resume signal, but also arm a short watchdog so the
+        // clicker can never become stuck in the paused state indefinitely.
+        handler.removeCallbacks(smartPauseFallbackRunnable);
+        handler.postDelayed(smartPauseFallbackRunnable, SMART_PAUSE_FALLBACK_MS);
     }
 
     private void resumeAfterUserTouch() {
         if (!tapping || !pausedForUserTouch || tapGesture == null) return;
+
         pausedForUserTouch = false;
+        handler.removeCallbacks(smartPauseFallbackRunnable);
         handler.removeCallbacks(tapRunnable);
-        handler.postDelayed(tapRunnable, 20);
+        handler.postDelayed(tapRunnable, SMART_PAUSE_END_DELAY_MS);
     }
 
     public void stopRapidTapping() {
@@ -102,6 +120,7 @@ public class RapidTapAccessibilityService extends AccessibilityService {
         pausedForUserTouch = false;
         gestureInFlight = false;
         handler.removeCallbacks(tapRunnable);
+        handler.removeCallbacks(smartPauseFallbackRunnable);
         tapGesture = null;
     }
 
@@ -145,12 +164,11 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // ACTION_OUTSIDE on the floating control tells us when a genuine user
-        // interaction begins. Android's accessibility event then tells us exactly
-        // when the user's fingers have left the screen, so Smart Pause can resume.
         if (event.getEventType() == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END &&
                 pausedForUserTouch && !gestureInFlight) {
-            resumeAfterUserTouch();
+            handler.removeCallbacks(smartPauseFallbackRunnable);
+            handler.removeCallbacks(tapRunnable);
+            handler.postDelayed(this::resumeAfterUserTouch, SMART_PAUSE_END_DELAY_MS);
         }
     }
 
