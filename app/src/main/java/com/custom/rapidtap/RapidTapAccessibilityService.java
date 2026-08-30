@@ -11,15 +11,10 @@ import java.util.Random;
 
 public class RapidTapAccessibilityService extends AccessibilityService {
     private static RapidTapAccessibilityService instance;
-    private static final long SMART_PAUSE_NO_EVENT_FALLBACK_MS = 2000L;
-    private static final long SMART_PAUSE_STALE_TOUCH_FALLBACK_MS = 15000L;
-    private static final long SMART_PAUSE_END_DELAY_MS = 20L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
     private final Runnable tapRunnable = this::performNextTap;
-    private final Runnable smartPauseFallbackRunnable = this::resumeIfTouchLifecycleMissing;
-    private final Runnable staleTouchFallbackRunnable = this::resumeIfTouchEndMissing;
     private final GestureResultCallback tapCallback = new GestureResultCallback() {
         @Override
         public void onCompleted(GestureDescription gestureDescription) {
@@ -35,8 +30,7 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     };
 
     private boolean tapping;
-    private boolean pausedForUserTouch;
-    private boolean userTouchInteractionActive;
+    private boolean paused;
     private volatile boolean gestureInFlight;
     private GestureDescription tapGesture;
     private int intervalMs = 75;
@@ -59,12 +53,12 @@ public class RapidTapAccessibilityService extends AccessibilityService {
         return tapping;
     }
 
-    public boolean isDispatchingGesture() {
-        return gestureInFlight;
+    public boolean isPaused() {
+        return paused;
     }
 
-    public boolean isPausedForUserTouch() {
-        return pausedForUserTouch;
+    public boolean isDispatchingGesture() {
+        return gestureInFlight;
     }
 
     public void startRapidTapping(
@@ -89,74 +83,30 @@ public class RapidTapAccessibilityService extends AccessibilityService {
                 new GestureDescription.StrokeDescription(path, 0, 1);
         tapGesture = new GestureDescription.Builder().addStroke(stroke).build();
 
-        pausedForUserTouch = false;
-        userTouchInteractionActive = false;
+        paused = false;
         tapping = true;
-        handler.removeCallbacks(smartPauseFallbackRunnable);
-        handler.removeCallbacks(staleTouchFallbackRunnable);
+        handler.removeCallbacks(tapRunnable);
         handler.post(tapRunnable);
     }
 
-    public void pauseForUserTouch() {
-        if (!tapping) return;
-
-        if (!pausedForUserTouch) {
-            pausedForUserTouch = true;
-            handler.removeCallbacks(tapRunnable);
-        }
-
-        // ACTION_OUTSIDE can arrive even if an OEM does not provide a complete
-        // accessibility touch lifecycle. Give TYPE_TOUCH_INTERACTION_START a
-        // chance to take ownership first; only use this fallback when that
-        // lifecycle never appears at all.
-        if (!userTouchInteractionActive) {
-            handler.removeCallbacks(smartPauseFallbackRunnable);
-            handler.postDelayed(
-                    smartPauseFallbackRunnable,
-                    SMART_PAUSE_NO_EVENT_FALLBACK_MS);
-        }
-    }
-
-    private void resumeAfterUserTouch() {
-        if (!tapping || !pausedForUserTouch || tapGesture == null) return;
-
-        pausedForUserTouch = false;
-        userTouchInteractionActive = false;
-        handler.removeCallbacks(smartPauseFallbackRunnable);
-        handler.removeCallbacks(staleTouchFallbackRunnable);
+    public void pauseRapidTapping() {
+        if (!tapping || paused) return;
+        paused = true;
         handler.removeCallbacks(tapRunnable);
-        handler.postDelayed(tapRunnable, SMART_PAUSE_END_DELAY_MS);
     }
 
-    private void resumeIfTouchLifecycleMissing() {
-        if (!tapping || !pausedForUserTouch || tapGesture == null) return;
-
-        // If Android told us a real touch interaction started, never let the
-        // short watchdog resume underneath the user's finger. Wait for the
-        // matching END event instead.
-        if (userTouchInteractionActive) return;
-
-        resumeAfterUserTouch();
-    }
-
-    private void resumeIfTouchEndMissing() {
-        if (!tapping || !pausedForUserTouch || tapGesture == null) return;
-
-        // Last-resort protection against an OEM dropping the END event after it
-        // did send START. Kept deliberately long so ordinary presses, holds and
-        // drags cannot resume underneath the user's finger.
-        userTouchInteractionActive = false;
-        resumeAfterUserTouch();
+    public void resumeRapidTapping() {
+        if (!tapping || !paused || tapGesture == null) return;
+        paused = false;
+        handler.removeCallbacks(tapRunnable);
+        handler.post(tapRunnable);
     }
 
     public void stopRapidTapping() {
         tapping = false;
-        pausedForUserTouch = false;
-        userTouchInteractionActive = false;
+        paused = false;
         gestureInFlight = false;
         handler.removeCallbacks(tapRunnable);
-        handler.removeCallbacks(smartPauseFallbackRunnable);
-        handler.removeCallbacks(staleTouchFallbackRunnable);
         tapGesture = null;
     }
 
@@ -180,14 +130,14 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     }
 
     private void scheduleNextTap() {
-        if (tapping && !pausedForUserTouch && tapGesture != null) {
+        if (tapping && !paused && tapGesture != null) {
             handler.postDelayed(tapRunnable, nextDelayMs());
         }
     }
 
     private void performNextTap() {
         GestureDescription gesture = tapGesture;
-        if (!tapping || pausedForUserTouch || gesture == null) return;
+        if (!tapping || paused || gesture == null) return;
 
         gestureInFlight = true;
 
@@ -200,34 +150,9 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        int type = event.getEventType();
-
-        if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_START &&
-                tapping && !gestureInFlight) {
-            userTouchInteractionActive = true;
-            if (!pausedForUserTouch) {
-                pausedForUserTouch = true;
-                handler.removeCallbacks(tapRunnable);
-            }
-
-            // A genuine START event means we can wait for the real release
-            // instead of using the short timer.
-            handler.removeCallbacks(smartPauseFallbackRunnable);
-            handler.removeCallbacks(staleTouchFallbackRunnable);
-            handler.postDelayed(
-                    staleTouchFallbackRunnable,
-                    SMART_PAUSE_STALE_TOUCH_FALLBACK_MS);
-            return;
-        }
-
-        if (type == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END &&
-                pausedForUserTouch && !gestureInFlight) {
-            userTouchInteractionActive = false;
-            handler.removeCallbacks(smartPauseFallbackRunnable);
-            handler.removeCallbacks(staleTouchFallbackRunnable);
-            handler.removeCallbacks(tapRunnable);
-            handler.postDelayed(this::resumeAfterUserTouch, SMART_PAUSE_END_DELAY_MS);
-        }
+        // Deliberately ignored. Android 10 / ColorOS touch-interaction events are
+        // not reliable enough to distinguish real user touches from injected
+        // gestures without intrusive touch-exploration behaviour.
     }
 
     @Override
