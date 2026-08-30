@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">Rapid Tap Toggle</string>
+    <string name="accessibility_desc">Allows Rapid Tap Toggle to generate repeated taps at the target point you choose.</string>
+</resources>
