@@ -30,12 +30,47 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+      - name: Build release APK
+        run: gradle --no-daemon assembleRelease
 
-      - name: Upload APK
+      - name: Create signing key
+        run: |
+          keytool -genkeypair -v \
+            -keystore rapidtap-release.jks \
+            -storepass rapidtap-local-release \
+            -keypass rapidtap-local-release \
+            -alias rapidtap \
+            -keyalg RSA \
+            -keysize 2048 \
+            -validity 10000 \
+            -dname "CN=Rapid Tap Toggle, OU=Personal App, O=Rapid Tap Toggle, L=Melbourne, ST=Victoria, C=AU"
+
+      - name: Align release APK
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -p -f 4 \
+            app/build/outputs/apk/release/app-release-unsigned.apk \
+            app/build/outputs/apk/release/RapidTapToggle-release-aligned.apk
+
+      - name: Sign release APK
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks rapidtap-release.jks \
+            --ks-key-alias rapidtap \
+            --ks-pass pass:rapidtap-local-release \
+            --key-pass pass:rapidtap-local-release \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --out app/build/outputs/apk/release/RapidTapToggle-release.apk \
+            app/build/outputs/apk/release/RapidTapToggle-release-aligned.apk
+
+      - name: Verify APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/release/RapidTapToggle-release.apk
+
+      - name: Upload signed release APK
         uses: actions/upload-artifact@v4
         with:
-          name: RapidTapToggle-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: RapidTapToggle-Release-APK
+          path: app/build/outputs/apk/release/RapidTapToggle-release.apk
           if-no-files-found: error
