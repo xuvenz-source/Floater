@@ -43,6 +43,7 @@ public class FloatingButtonService extends Service {
     private View pickerView;
     private WindowManager.LayoutParams floatingParams;
     private boolean tapping;
+    private boolean paused;
 
     @Override
     public void onCreate() {
@@ -117,7 +118,7 @@ public class FloatingButtonService extends Service {
             float downRawX;
             float downRawY;
             boolean moved;
-            boolean wasTappingAtDown;
+            boolean wasRunningAtDown;
             long lastTapUpAt;
             final int slop = dp(8);
 
@@ -125,11 +126,13 @@ public class FloatingButtonService extends Service {
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_OUTSIDE:
-                        if (tapping) {
+                        if (tapping && !paused) {
                             RapidTapAccessibilityService acc =
                                     RapidTapAccessibilityService.getInstance();
                             if (acc != null && !acc.isDispatchingGesture()) {
-                                acc.pauseForUserTouch();
+                                acc.pauseRapidTapping();
+                                paused = true;
+                                updateButtonAppearance();
                             }
                         }
                         return true;
@@ -140,15 +143,18 @@ public class FloatingButtonService extends Service {
                         downRawX = event.getRawX();
                         downRawY = event.getRawY();
                         moved = false;
-                        wasTappingAtDown = tapping;
+                        wasRunningAtDown = tapping && !paused;
 
-                        if (!wasTappingAtDown &&
+                        if (!wasRunningAtDown &&
                                 lastTapUpAt > 0 &&
                                 SystemClock.uptimeMillis() - lastTapUpAt <= DOUBLE_TAP_MS) {
                             cancelPendingSingleTap();
                         }
 
-                        if (wasTappingAtDown) {
+                        // Touching the red running control is an intentional stop.
+                        // A paused control remains armed so single tap can resume and
+                        // double tap can retarget.
+                        if (wasRunningAtDown) {
                             cancelPendingSingleTap();
                             stopRapidTap();
                             updateButtonAppearance();
@@ -178,7 +184,7 @@ public class FloatingButtonService extends Service {
                                     .putInt("button_x", floatingParams.x)
                                     .putInt("button_y", floatingParams.y)
                                     .apply();
-                        } else if (!wasTappingAtDown) {
+                        } else if (!wasRunningAtDown) {
                             long now = SystemClock.uptimeMillis();
                             if (lastTapUpAt > 0 && now - lastTapUpAt <= DOUBLE_TAP_MS) {
                                 cancelPendingSingleTap();
@@ -189,8 +195,12 @@ public class FloatingButtonService extends Service {
                                 pendingSingleTap = () -> {
                                     pendingSingleTap = null;
                                     lastTapUpAt = 0;
-                                    if (!tapping && pickerView == null) {
-                                        startRapidTap();
+                                    if (pickerView == null) {
+                                        if (tapping && paused) {
+                                            resumeRapidTap();
+                                        } else if (!tapping) {
+                                            startRapidTap();
+                                        }
                                         updateButtonAppearance();
                                     }
                                 };
@@ -243,12 +253,29 @@ public class FloatingButtonService extends Service {
                 pauseMin,
                 pauseMax);
         tapping = true;
+        paused = false;
+    }
+
+    private void resumeRapidTap() {
+        RapidTapAccessibilityService acc = RapidTapAccessibilityService.getInstance();
+        if (acc == null) {
+            Toast.makeText(this, "Enable Rapid Tap Toggle in Accessibility first.", Toast.LENGTH_LONG).show();
+            stopRapidTap();
+            return;
+        }
+
+        acc.resumeRapidTapping();
+        if (acc.isTapping() && !acc.isPaused()) {
+            tapping = true;
+            paused = false;
+        }
     }
 
     private void stopRapidTap() {
         RapidTapAccessibilityService acc = RapidTapAccessibilityService.getInstance();
         if (acc != null) acc.stopRapidTapping();
         tapping = false;
+        paused = false;
     }
 
     private void cancelPendingSingleTap() {
@@ -260,11 +287,18 @@ public class FloatingButtonService extends Service {
 
     private void updateButtonAppearance() {
         if (floatingButton == null) return;
-        if (tapping) {
+
+        if (tapping && paused) {
+            floatingButton.setText("Ⅱ");
+            floatingButton.setTextSize(21);
+            floatingButton.setBackground(circle(Color.argb(235, 190, 125, 35)));
+        } else if (tapping) {
             floatingButton.setText("■");
+            floatingButton.setTextSize(23);
             floatingButton.setBackground(circle(Color.argb(235, 175, 55, 55)));
         } else {
             floatingButton.setText("▶");
+            floatingButton.setTextSize(23);
             floatingButton.setBackground(circle(Color.argb(235, 55, 95, 165)));
         }
     }
