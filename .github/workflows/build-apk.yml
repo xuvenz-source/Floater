@@ -8,6 +8,11 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -33,17 +38,33 @@ jobs:
       - name: Build release APK
         run: gradle --no-daemon assembleRelease
 
-      - name: Create signing key
+      - name: Prepare signing key
+        shell: bash
         run: |
-          keytool -genkeypair -v \
-            -keystore rapidtap-release.jks \
-            -storepass rapidtap-local-release \
-            -keypass rapidtap-local-release \
-            -alias rapidtap \
-            -keyalg RSA \
-            -keysize 2048 \
-            -validity 10000 \
-            -dname "CN=Rapid Tap Toggle, OU=Personal App, O=Rapid Tap Toggle, L=Melbourne, ST=Victoria, C=AU"
+          set -euo pipefail
+
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > rapidtap-release.jks
+            echo "SIGN_STORE_PASS=$ANDROID_KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGN_KEY_PASS=$ANDROID_KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGN_KEY_ALIAS=$ANDROID_KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "SIGNING_MODE=persistent" >> "$GITHUB_ENV"
+          else
+            TEMP_PASS="rapidtap-local-release"
+            keytool -genkeypair -v \
+              -keystore rapidtap-release.jks \
+              -storepass "$TEMP_PASS" \
+              -keypass "$TEMP_PASS" \
+              -alias rapidtap \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Rapid Tap Toggle, OU=Personal App, O=Rapid Tap Toggle, L=Melbourne, ST=Victoria, C=AU"
+            echo "SIGN_STORE_PASS=$TEMP_PASS" >> "$GITHUB_ENV"
+            echo "SIGN_KEY_PASS=$TEMP_PASS" >> "$GITHUB_ENV"
+            echo "SIGN_KEY_ALIAS=rapidtap" >> "$GITHUB_ENV"
+            echo "SIGNING_MODE=temporary" >> "$GITHUB_ENV"
+          fi
 
       - name: Align release APK
         run: |
@@ -55,9 +76,9 @@ jobs:
         run: |
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
             --ks rapidtap-release.jks \
-            --ks-key-alias rapidtap \
-            --ks-pass pass:rapidtap-local-release \
-            --key-pass pass:rapidtap-local-release \
+            --ks-key-alias "$SIGN_KEY_ALIAS" \
+            --ks-pass "pass:$SIGN_STORE_PASS" \
+            --key-pass "pass:$SIGN_KEY_PASS" \
             --v1-signing-enabled true \
             --v2-signing-enabled true \
             --out app/build/outputs/apk/release/RapidTapToggle-release.apk \
@@ -65,6 +86,7 @@ jobs:
 
       - name: Verify APK signature
         run: |
+          echo "Signing mode: $SIGNING_MODE"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs \
             app/build/outputs/apk/release/RapidTapToggle-release.apk
 
