@@ -1,0 +1,16 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.custom.rapidtap'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'com.custom.rapidtap'
+        minSdk 24
+        targetSdk 29
+        versionCode 2
+        versionName '1.1'
+    }
+}
