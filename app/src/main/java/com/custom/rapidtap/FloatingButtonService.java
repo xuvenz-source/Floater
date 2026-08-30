@@ -128,9 +128,8 @@ public class FloatingButtonService extends Service {
                         if (tapping) {
                             RapidTapAccessibilityService acc =
                                     RapidTapAccessibilityService.getInstance();
-                            if (acc == null || !acc.isDispatchingGesture()) {
-                                stopRapidTap();
-                                updateButtonAppearance();
+                            if (acc != null && !acc.isDispatchingGesture()) {
+                                acc.pauseForUserTouch();
                             }
                         }
                         return true;
