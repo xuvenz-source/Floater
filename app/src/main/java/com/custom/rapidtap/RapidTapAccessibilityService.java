@@ -14,10 +14,24 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Random random = new Random();
+    private final Runnable tapRunnable = this::performNextTap;
+    private final GestureResultCallback tapCallback = new GestureResultCallback() {
+        @Override
+        public void onCompleted(GestureDescription gestureDescription) {
+            gestureInFlight = false;
+            scheduleNextTap();
+        }
+
+        @Override
+        public void onCancelled(GestureDescription gestureDescription) {
+            gestureInFlight = false;
+            scheduleNextTap();
+        }
+    };
+
     private boolean tapping;
     private volatile boolean gestureInFlight;
-    private int tapX;
-    private int tapY;
+    private GestureDescription tapGesture;
     private int intervalMs = 75;
     private int timingVariationMs;
     private int pauseChancePercent;
@@ -50,22 +64,32 @@ public class RapidTapAccessibilityService extends AccessibilityService {
             int pauseChance,
             int pauseMin,
             int pauseMax) {
-        tapX = x;
-        tapY = y;
+        if (tapping) return;
+
         intervalMs = Math.max(30, Math.min(1000, interval));
         timingVariationMs = Math.max(0, Math.min(500, variation));
         pauseChancePercent = Math.max(0, Math.min(50, pauseChance));
         pauseMinMs = Math.max(0, Math.min(5000, pauseMin));
         pauseMaxMs = Math.max(pauseMinMs, Math.min(5000, pauseMax));
-        if (tapping) return;
+
+        // Build the immutable tap gesture once for this run and reuse it for every
+        // dispatch. Previously Path, StrokeDescription, GestureDescription and the
+        // callback were recreated on every tap, causing unnecessary GC churn.
+        Path path = new Path();
+        path.moveTo(x, y);
+        GestureDescription.StrokeDescription stroke =
+                new GestureDescription.StrokeDescription(path, 0, 1);
+        tapGesture = new GestureDescription.Builder().addStroke(stroke).build();
+
         tapping = true;
-        handler.post(this::performNextTap);
+        handler.post(tapRunnable);
     }
 
     public void stopRapidTapping() {
         tapping = false;
         gestureInFlight = false;
-        handler.removeCallbacksAndMessages(null);
+        handler.removeCallbacks(tapRunnable);
+        tapGesture = null;
     }
 
     private int nextDelayMs() {
@@ -88,40 +112,21 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     }
 
     private void scheduleNextTap() {
-        if (tapping) {
-            handler.postDelayed(this::performNextTap, nextDelayMs());
+        if (tapping && tapGesture != null) {
+            handler.postDelayed(tapRunnable, nextDelayMs());
         }
     }
 
     private void performNextTap() {
-        if (!tapping) return;
-
-        Path path = new Path();
-        path.moveTo(tapX, tapY);
-        GestureDescription.StrokeDescription stroke =
-                new GestureDescription.StrokeDescription(path, 0, 1);
-        GestureDescription gesture =
-                new GestureDescription.Builder().addStroke(stroke).build();
+        GestureDescription gesture = tapGesture;
+        if (!tapping || gesture == null) return;
 
         // The floating overlay watches touches outside itself so it can pause when
         // the user interacts with the game. Mark our own generated gesture so the
         // overlay can distinguish it from a real user touch.
         gestureInFlight = true;
 
-        boolean accepted = dispatchGesture(gesture, new GestureResultCallback() {
-            @Override
-            public void onCompleted(GestureDescription gestureDescription) {
-                gestureInFlight = false;
-                scheduleNextTap();
-            }
-
-            @Override
-            public void onCancelled(GestureDescription gestureDescription) {
-                gestureInFlight = false;
-                scheduleNextTap();
-            }
-        }, null);
-
+        boolean accepted = dispatchGesture(gesture, tapCallback, null);
         if (!accepted) {
             gestureInFlight = false;
             scheduleNextTap();
