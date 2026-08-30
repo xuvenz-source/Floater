@@ -12,6 +12,7 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean tapping;
+    private volatile boolean gestureInFlight;
     private int tapX;
     private int tapY;
     private int intervalMs = 75;
@@ -28,6 +29,10 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     public boolean isTapping() {
         return tapping;
+    }
+
+    public boolean isDispatchingGesture() {
+        return gestureInFlight;
     }
 
     public void startRapidTapping(int x, int y, int interval) {
@@ -54,9 +59,15 @@ public class RapidTapAccessibilityService extends AccessibilityService {
         GestureDescription gesture =
                 new GestureDescription.Builder().addStroke(stroke).build();
 
+        // The floating overlay watches touches outside itself so it can pause when
+        // the user interacts with the game. Mark our own generated gesture so the
+        // overlay can distinguish it from a real user touch.
+        gestureInFlight = true;
+
         boolean accepted = dispatchGesture(gesture, new GestureResultCallback() {
             @Override
             public void onCompleted(GestureDescription gestureDescription) {
+                gestureInFlight = false;
                 if (tapping) {
                     handler.postDelayed(RapidTapAccessibilityService.this::performNextTap, intervalMs);
                 }
@@ -64,20 +75,24 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
             @Override
             public void onCancelled(GestureDescription gestureDescription) {
+                gestureInFlight = false;
                 if (tapping) {
                     handler.postDelayed(RapidTapAccessibilityService.this::performNextTap, intervalMs);
                 }
             }
         }, null);
 
-        if (!accepted && tapping) {
-            handler.postDelayed(this::performNextTap, intervalMs);
+        if (!accepted) {
+            gestureInFlight = false;
+            if (tapping) {
+                handler.postDelayed(this::performNextTap, intervalMs);
+            }
         }
     }
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // No events are inspected. The service is used only for gesture dispatch.
+        // No screen content is inspected. The service is used only for gesture dispatch.
     }
 
     @Override
@@ -88,6 +103,7 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         stopRapidTapping();
+        gestureInFlight = false;
         if (instance == this) instance = null;
         super.onDestroy();
     }
