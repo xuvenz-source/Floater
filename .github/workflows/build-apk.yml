@@ -11,8 +11,6 @@ jobs:
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
 
     steps:
       - name: Checkout
@@ -53,60 +51,52 @@ jobs:
           marker = 'ANDROID_KEYSTORE_BASE64='
           if marker in raw:
               raw = raw.split(marker, 1)[1]
-
           raw = raw.strip().strip('`').strip('"').strip("'")
           start = raw.find('MII')
           if start < 0:
               raise SystemExit('No keystore payload beginning with MII was found')
           raw = raw[start:]
-
           allowed = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
           payload = ''.join(ch for ch in raw if ch in allowed)
-
           expected_len = 3728
           if len(payload) < expected_len:
               raise SystemExit(f'Keystore base64 is incomplete: found {len(payload)} characters, expected {expected_len}')
-          if len(payload) > expected_len:
-              payload = payload[:expected_len]
-
-          try:
-              decoded = base64.b64decode(payload, validate=True)
-          except Exception as exc:
-              raise SystemExit(f'Keystore base64 still failed validation: {exc}')
-
+          payload = payload[:expected_len]
+          decoded = base64.b64decode(payload, validate=True)
           if len(decoded) != 2796:
               raise SystemExit(f'Keystore decoded to {len(decoded)} bytes, expected 2796')
-
           with open('rapidtap-release.jks', 'wb') as f:
               f.write(decoded)
           print('Persistent keystore payload decoded successfully')
           PY
 
-            clean_secret() {
-              local value="$1"
-              local prefix="$2"
-              value="${value#$prefix=}"
-              value="${value//$'\r'/}"
-              value="${value//$'\n'/}"
-              value="${value#\"}"
-              value="${value%\"}"
-              value="${value#\'}"
-              value="${value%\'}"
-              printf '%s' "$value"
-            }
+            export PASS_RAW="$ANDROID_KEYSTORE_PASSWORD"
+            STORE_PASS="$(python3 - <<'PY'
+          import os
+          raw = os.environ.get('PASS_RAW', '').strip()
+          marker = 'ANDROID_KEYSTORE_PASSWORD='
+          if marker in raw:
+              raw = raw.split(marker, 1)[1]
+          print(raw.strip().strip('`').strip('"').strip("'"), end='')
+          PY
+            )"
 
-            STORE_PASS="$(clean_secret "$ANDROID_KEYSTORE_PASSWORD" ANDROID_KEYSTORE_PASSWORD)"
-            KEY_ALIAS="$(clean_secret "$ANDROID_KEY_ALIAS" ANDROID_KEY_ALIAS)"
-            KEY_PASS="$(clean_secret "$ANDROID_KEY_PASSWORD" ANDROID_KEY_PASSWORD)"
+            if [ "${#STORE_PASS}" -ne 32 ]; then
+              echo "ANDROID_KEYSTORE_PASSWORD has ${#STORE_PASS} characters after cleanup; expected 32."
+              exit 1
+            fi
 
-            keytool -list \
+            if ! keytool -list \
               -keystore rapidtap-release.jks \
               -storepass "$STORE_PASS" \
-              -alias "$KEY_ALIAS" > /dev/null
+              -alias rapidtap > /dev/null 2>&1; then
+              echo "The keystore decoded correctly, but ANDROID_KEYSTORE_PASSWORD does not unlock it."
+              exit 1
+            fi
 
             echo "SIGN_STORE_PASS=$STORE_PASS" >> "$GITHUB_ENV"
-            echo "SIGN_KEY_PASS=$KEY_PASS" >> "$GITHUB_ENV"
-            echo "SIGN_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "SIGN_KEY_PASS=$STORE_PASS" >> "$GITHUB_ENV"
+            echo "SIGN_KEY_ALIAS=rapidtap" >> "$GITHUB_ENV"
             echo "SIGNING_MODE=persistent" >> "$GITHUB_ENV"
           else
             TEMP_PASS="rapidtap-local-release"
