@@ -93,6 +93,8 @@ public class FloatingButtonService extends Service {
                 dp(56),
                 overlayType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL |
+                        WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH |
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT);
         floatingParams.gravity = Gravity.TOP | Gravity.START;
@@ -113,6 +115,21 @@ public class FloatingButtonService extends Service {
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_OUTSIDE:
+                        // Android gives a small non-modal overlay one ACTION_OUTSIDE
+                        // when the user begins touching somewhere else. Use that as a
+                        // smart-pause signal, but ignore the gestures that this app is
+                        // currently injecting itself.
+                        if (tapping) {
+                            RapidTapAccessibilityService acc =
+                                    RapidTapAccessibilityService.getInstance();
+                            if (acc == null || !acc.isDispatchingGesture()) {
+                                stopRapidTap();
+                                updateButtonAppearance();
+                            }
+                        }
+                        return true;
+
                     case MotionEvent.ACTION_DOWN:
                         initialX = floatingParams.x;
                         initialY = floatingParams.y;
