@@ -44,15 +44,39 @@ jobs:
           set -euo pipefail
 
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            KS_B64="${ANDROID_KEYSTORE_BASE64#ANDROID_KEYSTORE_BASE64=}"
-            STORE_PASS="${ANDROID_KEYSTORE_PASSWORD#ANDROID_KEYSTORE_PASSWORD=}"
-            KEY_ALIAS="${ANDROID_KEY_ALIAS#ANDROID_KEY_ALIAS=}"
-            KEY_PASS="${ANDROID_KEY_PASSWORD#ANDROID_KEY_PASSWORD=}"
+            # Be tolerant of copying the whole NAME=value line, quotes, markdown,
+            # or even surrounding text into the GitHub secret. Our PKCS12/JKS
+            # payload begins with MII, so extract the actual base64 token.
+            export KS_RAW="$ANDROID_KEYSTORE_BASE64"
+            KS_B64="$(python3 - <<'PY'
+          import os, re
+          raw = os.environ.get('KS_RAW', '')
+          matches = re.findall(r'MII[A-Za-z0-9+/=]+', raw.replace('\r', '').replace('\n', ''))
+          if not matches:
+              raise SystemExit('No keystore base64 payload beginning with MII was found in ANDROID_KEYSTORE_BASE64')
+          print(max(matches, key=len))
+          PY
+            )"
 
-            printf '%s' "$KS_B64" | tr -d '[:space:]' | base64 --decode > rapidtap-release.jks
+            clean_secret() {
+              local value="$1"
+              local prefix="$2"
+              value="${value#$prefix=}"
+              value="${value//$'\r'/}"
+              value="${value//$'\n'/}"
+              value="${value#\"}"
+              value="${value%\"}"
+              value="${value#\'}"
+              value="${value%\'}"
+              printf '%s' "$value"
+            }
 
-            # Validate the decoded keystore here so bad secret data fails with a
-            # useful error before the APK signing step.
+            STORE_PASS="$(clean_secret "$ANDROID_KEYSTORE_PASSWORD" ANDROID_KEYSTORE_PASSWORD)"
+            KEY_ALIAS="$(clean_secret "$ANDROID_KEY_ALIAS" ANDROID_KEY_ALIAS)"
+            KEY_PASS="$(clean_secret "$ANDROID_KEY_PASSWORD" ANDROID_KEY_PASSWORD)"
+
+            printf '%s' "$KS_B64" | base64 --decode > rapidtap-release.jks
+
             keytool -list \
               -keystore rapidtap-release.jks \
               -storepass "$STORE_PASS" \
