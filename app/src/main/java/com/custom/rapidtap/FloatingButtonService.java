@@ -149,8 +149,6 @@ public class FloatingButtonService extends Service {
                             cancelPendingSingleTap();
                         }
 
-                        // Stop immediately when the running bubble is touched so an
-                        // accessibility gesture cannot interfere with the stop press.
                         if (wasTappingAtDown) {
                             cancelPendingSingleTap();
                             stopRapidTap();
@@ -192,7 +190,7 @@ public class FloatingButtonService extends Service {
                                 pendingSingleTap = () -> {
                                     pendingSingleTap = null;
                                     lastTapUpAt = 0;
-                                    if (!tapping) {
+                                    if (!tapping && pickerView == null) {
                                         startRapidTap();
                                         updateButtonAppearance();
                                     }
@@ -280,25 +278,21 @@ public class FloatingButtonService extends Service {
 
         LinearLayout picker = new LinearLayout(this);
         picker.setOrientation(LinearLayout.VERTICAL);
-        picker.setPadding(dp(7), dp(7), dp(7), dp(7));
         picker.setGravity(Gravity.CENTER_HORIZONTAL);
-        picker.setBackground(rounded(Color.argb(230, 30, 30, 30), 14));
+        picker.setBackgroundColor(Color.TRANSPARENT);
 
-        TextView marker = new TextView(this);
-        marker.setText("⊕\nDRAG TARGET");
-        marker.setTextColor(Color.WHITE);
-        marker.setTextSize(14);
-        marker.setGravity(Gravity.CENTER);
-        marker.setBackground(rounded(Color.argb(235, 125, 50, 50), 12));
-        picker.addView(marker, new LinearLayout.LayoutParams(dp(112), dp(82)));
+        CrosshairView marker = new CrosshairView(this);
+        picker.addView(marker, new LinearLayout.LayoutParams(dp(120), dp(120)));
 
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.HORIZONTAL);
         actions.setGravity(Gravity.CENTER);
+        actions.setPadding(dp(4), dp(3), dp(4), dp(3));
+        actions.setBackground(rounded(Color.argb(145, 20, 20, 20), 12));
         LinearLayout.LayoutParams actionsLp = new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT);
-        actionsLp.setMargins(0, dp(5), 0, 0);
+        actionsLp.setMargins(0, dp(2), 0, 0);
         picker.addView(actions, actionsLp);
 
         Button set = new Button(this);
@@ -306,8 +300,9 @@ public class FloatingButtonService extends Service {
         set.setTextColor(Color.WHITE);
         set.setTextSize(12);
         set.setAllCaps(false);
-        set.setBackground(rounded(Color.rgb(45, 100, 55), 10));
-        actions.addView(set, new LinearLayout.LayoutParams(dp(72), dp(48)));
+        set.setPadding(dp(4), 0, dp(4), 0);
+        set.setBackground(rounded(Color.argb(190, 45, 110, 60), 10));
+        actions.addView(set, new LinearLayout.LayoutParams(dp(68), dp(42)));
 
         Button cancel = new Button(this);
         cancel.setText("×");
@@ -315,9 +310,9 @@ public class FloatingButtonService extends Service {
         cancel.setTextSize(19);
         cancel.setAllCaps(false);
         cancel.setPadding(0, 0, 0, 0);
-        cancel.setBackground(rounded(Color.rgb(65, 65, 65), 10));
-        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(dp(48), dp(48));
-        cancelLp.setMargins(dp(5), 0, 0, 0);
+        cancel.setBackground(rounded(Color.argb(180, 55, 55, 55), 10));
+        LinearLayout.LayoutParams cancelLp = new LinearLayout.LayoutParams(dp(42), dp(42));
+        cancelLp.setMargins(dp(4), 0, 0, 0);
         actions.addView(cancel, cancelLp);
 
         int overlayType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
@@ -389,7 +384,7 @@ public class FloatingButtonService extends Service {
         pickerView = picker;
         windowManager.addView(pickerView, params);
         Toast.makeText(this,
-                "Drag ⊕ over the new target, then press SET.",
+                "Drag the crosshair centre over the target, then press SET.",
                 Toast.LENGTH_LONG).show();
     }
 
