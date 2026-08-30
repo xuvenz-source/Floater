@@ -20,3 +20,5 @@ A small Android overlay utility designed for Android 10.
 - Target Android 10 (API 29)
 
 The GitHub Actions workflow builds an installable debug APK and uploads it as an artifact.
+
+Build trigger initialized.
