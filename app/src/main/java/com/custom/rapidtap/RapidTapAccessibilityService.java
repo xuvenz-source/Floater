@@ -30,6 +30,7 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     };
 
     private boolean tapping;
+    private boolean pausedForUserTouch;
     private volatile boolean gestureInFlight;
     private GestureDescription tapGesture;
     private int intervalMs = 75;
@@ -72,21 +73,33 @@ public class RapidTapAccessibilityService extends AccessibilityService {
         pauseMinMs = Math.max(0, Math.min(5000, pauseMin));
         pauseMaxMs = Math.max(pauseMinMs, Math.min(5000, pauseMax));
 
-        // Build the immutable tap gesture once for this run and reuse it for every
-        // dispatch. Previously Path, StrokeDescription, GestureDescription and the
-        // callback were recreated on every tap, causing unnecessary GC churn.
         Path path = new Path();
         path.moveTo(x, y);
         GestureDescription.StrokeDescription stroke =
                 new GestureDescription.StrokeDescription(path, 0, 1);
         tapGesture = new GestureDescription.Builder().addStroke(stroke).build();
 
+        pausedForUserTouch = false;
         tapping = true;
         handler.post(tapRunnable);
     }
 
+    public void pauseForUserTouch() {
+        if (!tapping || pausedForUserTouch) return;
+        pausedForUserTouch = true;
+        handler.removeCallbacks(tapRunnable);
+    }
+
+    private void resumeAfterUserTouch() {
+        if (!tapping || !pausedForUserTouch || tapGesture == null) return;
+        pausedForUserTouch = false;
+        handler.removeCallbacks(tapRunnable);
+        handler.postDelayed(tapRunnable, 20);
+    }
+
     public void stopRapidTapping() {
         tapping = false;
+        pausedForUserTouch = false;
         gestureInFlight = false;
         handler.removeCallbacks(tapRunnable);
         tapGesture = null;
@@ -112,18 +125,15 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     }
 
     private void scheduleNextTap() {
-        if (tapping && tapGesture != null) {
+        if (tapping && !pausedForUserTouch && tapGesture != null) {
             handler.postDelayed(tapRunnable, nextDelayMs());
         }
     }
 
     private void performNextTap() {
         GestureDescription gesture = tapGesture;
-        if (!tapping || gesture == null) return;
+        if (!tapping || pausedForUserTouch || gesture == null) return;
 
-        // The floating overlay watches touches outside itself so it can pause when
-        // the user interacts with the game. Mark our own generated gesture so the
-        // overlay can distinguish it from a real user touch.
         gestureInFlight = true;
 
         boolean accepted = dispatchGesture(gesture, tapCallback, null);
@@ -135,7 +145,13 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // No screen content is inspected. The service is used only for gesture dispatch.
+        // ACTION_OUTSIDE on the floating control tells us when a genuine user
+        // interaction begins. Android's accessibility event then tells us exactly
+        // when the user's fingers have left the screen, so Smart Pause can resume.
+        if (event.getEventType() == AccessibilityEvent.TYPE_TOUCH_INTERACTION_END &&
+                pausedForUserTouch && !gestureInFlight) {
+            resumeAfterUserTouch();
+        }
     }
 
     @Override
