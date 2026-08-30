@@ -12,7 +12,10 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.MotionEvent;
@@ -31,7 +34,10 @@ public class FloatingButtonService extends Service {
     private static final String PREFS = "rapid_tap_prefs";
     private static final String CHANNEL_ID = "rapid_tap_overlay";
     private static final int NOTIFICATION_ID = 2001;
+    private static final long DOUBLE_TAP_MS = 300L;
 
+    private final Handler uiHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingSingleTap;
     private WindowManager windowManager;
     private TextView floatingButton;
     private View pickerView;
@@ -56,6 +62,7 @@ public class FloatingButtonService extends Service {
 
         String action = intent != null ? intent.getAction() : ACTION_SHOW;
         if (ACTION_HIDE.equals(action)) {
+            cancelPendingSingleTap();
             stopRapidTap();
             removeFloatingView();
             removePicker();
@@ -63,6 +70,7 @@ public class FloatingButtonService extends Service {
             return START_NOT_STICKY;
         }
         if (ACTION_PICK_TARGET.equals(action)) {
+            cancelPendingSingleTap();
             stopRapidTap();
             showTargetPicker();
             return START_STICKY;
@@ -110,16 +118,13 @@ public class FloatingButtonService extends Service {
             float downRawY;
             boolean moved;
             boolean wasTappingAtDown;
+            long lastTapUpAt;
             final int slop = dp(8);
 
             @Override
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_OUTSIDE:
-                        // Android gives a small non-modal overlay one ACTION_OUTSIDE
-                        // when the user begins touching somewhere else. Use that as a
-                        // smart-pause signal, but ignore the gestures that this app is
-                        // currently injecting itself.
                         if (tapping) {
                             RapidTapAccessibilityService acc =
                                     RapidTapAccessibilityService.getInstance();
@@ -138,10 +143,16 @@ public class FloatingButtonService extends Service {
                         moved = false;
                         wasTappingAtDown = tapping;
 
-                        // On Android 10, injected accessibility gestures can cancel an
-                        // in-progress touch. Stop immediately on touch-down so tapping
-                        // can always be turned off reliably.
+                        if (!wasTappingAtDown &&
+                                lastTapUpAt > 0 &&
+                                SystemClock.uptimeMillis() - lastTapUpAt <= DOUBLE_TAP_MS) {
+                            cancelPendingSingleTap();
+                        }
+
+                        // Stop immediately when the running bubble is touched so an
+                        // accessibility gesture cannot interfere with the stop press.
                         if (wasTappingAtDown) {
+                            cancelPendingSingleTap();
                             stopRapidTap();
                             updateButtonAppearance();
                         }
@@ -150,7 +161,11 @@ public class FloatingButtonService extends Service {
                     case MotionEvent.ACTION_MOVE:
                         float dx = event.getRawX() - downRawX;
                         float dy = event.getRawY() - downRawY;
-                        if (!moved && (Math.abs(dx) > slop || Math.abs(dy) > slop)) moved = true;
+                        if (!moved && (Math.abs(dx) > slop || Math.abs(dy) > slop)) {
+                            moved = true;
+                            cancelPendingSingleTap();
+                            lastTapUpAt = 0;
+                        }
                         if (moved) {
                             floatingParams.x = initialX + Math.round(dx);
                             floatingParams.y = initialY + Math.round(dy);
@@ -167,7 +182,23 @@ public class FloatingButtonService extends Service {
                                     .putInt("button_y", floatingParams.y)
                                     .apply();
                         } else if (!wasTappingAtDown) {
-                            startRapidTap();
+                            long now = SystemClock.uptimeMillis();
+                            if (lastTapUpAt > 0 && now - lastTapUpAt <= DOUBLE_TAP_MS) {
+                                cancelPendingSingleTap();
+                                lastTapUpAt = 0;
+                                showTargetPicker();
+                            } else {
+                                lastTapUpAt = now;
+                                pendingSingleTap = () -> {
+                                    pendingSingleTap = null;
+                                    lastTapUpAt = 0;
+                                    if (!tapping) {
+                                        startRapidTap();
+                                        updateButtonAppearance();
+                                    }
+                                };
+                                uiHandler.postDelayed(pendingSingleTap, DOUBLE_TAP_MS);
+                            }
                         }
                         updateButtonAppearance();
                         return true;
@@ -201,7 +232,19 @@ public class FloatingButtonService extends Service {
         int x = prefs.getInt("target_x", 0);
         int y = prefs.getInt("target_y", 0);
         int interval = prefs.getInt("interval", 75);
-        acc.startRapidTapping(x, y, interval);
+        int variation = prefs.getInt("timing_variation", 0);
+        int pauseChance = prefs.getInt("pause_chance", 0);
+        int pauseMin = prefs.getInt("pause_min", 150);
+        int pauseMax = prefs.getInt("pause_max", 450);
+
+        acc.startRapidTapping(
+                x,
+                y,
+                interval,
+                variation,
+                pauseChance,
+                pauseMin,
+                pauseMax);
         tapping = true;
     }
 
@@ -209,6 +252,13 @@ public class FloatingButtonService extends Service {
         RapidTapAccessibilityService acc = RapidTapAccessibilityService.getInstance();
         if (acc != null) acc.stopRapidTapping();
         tapping = false;
+    }
+
+    private void cancelPendingSingleTap() {
+        if (pendingSingleTap != null) {
+            uiHandler.removeCallbacks(pendingSingleTap);
+            pendingSingleTap = null;
+        }
     }
 
     private void updateButtonAppearance() {
@@ -223,6 +273,9 @@ public class FloatingButtonService extends Service {
     }
 
     private void showTargetPicker() {
+        cancelPendingSingleTap();
+        stopRapidTap();
+        updateButtonAppearance();
         removePicker();
 
         LinearLayout picker = new LinearLayout(this);
@@ -336,11 +389,12 @@ public class FloatingButtonService extends Service {
         pickerView = picker;
         windowManager.addView(pickerView, params);
         Toast.makeText(this,
-                "Switch to your game, drag ⊕ over the target, then press SET.",
+                "Drag ⊕ over the new target, then press SET.",
                 Toast.LENGTH_LONG).show();
     }
 
     private void removeFloatingView() {
+        cancelPendingSingleTap();
         if (floatingButton != null) {
             try {
                 windowManager.removeView(floatingButton);
@@ -360,6 +414,7 @@ public class FloatingButtonService extends Service {
 
     @Override
     public void onDestroy() {
+        cancelPendingSingleTap();
         stopRapidTap();
         removePicker();
         removeFloatingView();
