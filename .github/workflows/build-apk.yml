@@ -44,19 +44,43 @@ jobs:
           set -euo pipefail
 
           if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
-            # Be tolerant of copying the whole NAME=value line, quotes, markdown,
-            # or even surrounding text into the GitHub secret. Our PKCS12/JKS
-            # payload begins with MII, so extract the actual base64 token.
             export KS_RAW="$ANDROID_KEYSTORE_BASE64"
-            KS_B64="$(python3 - <<'PY'
-          import os, re
+            python3 - <<'PY'
+          import base64
+          import os
+
           raw = os.environ.get('KS_RAW', '')
-          matches = re.findall(r'MII[A-Za-z0-9+/=]+', raw.replace('\r', '').replace('\n', ''))
-          if not matches:
-              raise SystemExit('No keystore base64 payload beginning with MII was found in ANDROID_KEYSTORE_BASE64')
-          print(max(matches, key=len))
+          marker = 'ANDROID_KEYSTORE_BASE64='
+          if marker in raw:
+              raw = raw.split(marker, 1)[1]
+
+          raw = raw.strip().strip('`').strip('"').strip("'")
+          start = raw.find('MII')
+          if start < 0:
+              raise SystemExit('No keystore payload beginning with MII was found')
+          raw = raw[start:]
+
+          allowed = set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+          payload = ''.join(ch for ch in raw if ch in allowed)
+
+          expected_len = 3728
+          if len(payload) < expected_len:
+              raise SystemExit(f'Keystore base64 is incomplete: found {len(payload)} characters, expected {expected_len}')
+          if len(payload) > expected_len:
+              payload = payload[:expected_len]
+
+          try:
+              decoded = base64.b64decode(payload, validate=True)
+          except Exception as exc:
+              raise SystemExit(f'Keystore base64 still failed validation: {exc}')
+
+          if len(decoded) != 2796:
+              raise SystemExit(f'Keystore decoded to {len(decoded)} bytes, expected 2796')
+
+          with open('rapidtap-release.jks', 'wb') as f:
+              f.write(decoded)
+          print('Persistent keystore payload decoded successfully')
           PY
-            )"
 
             clean_secret() {
               local value="$1"
@@ -74,8 +98,6 @@ jobs:
             STORE_PASS="$(clean_secret "$ANDROID_KEYSTORE_PASSWORD" ANDROID_KEYSTORE_PASSWORD)"
             KEY_ALIAS="$(clean_secret "$ANDROID_KEY_ALIAS" ANDROID_KEY_ALIAS)"
             KEY_PASS="$(clean_secret "$ANDROID_KEY_PASSWORD" ANDROID_KEY_PASSWORD)"
-
-            printf '%s' "$KS_B64" | base64 --decode > rapidtap-release.jks
 
             keytool -list \
               -keystore rapidtap-release.jks \
