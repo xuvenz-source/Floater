@@ -7,15 +7,22 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.accessibility.AccessibilityEvent;
 
+import java.util.Random;
+
 public class RapidTapAccessibilityService extends AccessibilityService {
     private static RapidTapAccessibilityService instance;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Random random = new Random();
     private boolean tapping;
     private volatile boolean gestureInFlight;
     private int tapX;
     private int tapY;
     private int intervalMs = 75;
+    private int timingVariationMs;
+    private int pauseChancePercent;
+    private int pauseMinMs = 150;
+    private int pauseMaxMs = 450;
 
     public static RapidTapAccessibilityService getInstance() {
         return instance;
@@ -35,10 +42,21 @@ public class RapidTapAccessibilityService extends AccessibilityService {
         return gestureInFlight;
     }
 
-    public void startRapidTapping(int x, int y, int interval) {
+    public void startRapidTapping(
+            int x,
+            int y,
+            int interval,
+            int variation,
+            int pauseChance,
+            int pauseMin,
+            int pauseMax) {
         tapX = x;
         tapY = y;
         intervalMs = Math.max(30, Math.min(1000, interval));
+        timingVariationMs = Math.max(0, Math.min(500, variation));
+        pauseChancePercent = Math.max(0, Math.min(50, pauseChance));
+        pauseMinMs = Math.max(0, Math.min(5000, pauseMin));
+        pauseMaxMs = Math.max(pauseMinMs, Math.min(5000, pauseMax));
         if (tapping) return;
         tapping = true;
         handler.post(this::performNextTap);
@@ -46,7 +64,33 @@ public class RapidTapAccessibilityService extends AccessibilityService {
 
     public void stopRapidTapping() {
         tapping = false;
+        gestureInFlight = false;
         handler.removeCallbacksAndMessages(null);
+    }
+
+    private int nextDelayMs() {
+        int delay = intervalMs;
+
+        if (timingVariationMs > 0) {
+            int spread = timingVariationMs * 2 + 1;
+            delay += random.nextInt(spread) - timingVariationMs;
+        }
+
+        delay = Math.max(30, delay);
+
+        if (pauseChancePercent > 0 && random.nextInt(100) < pauseChancePercent) {
+            int range = pauseMaxMs - pauseMinMs;
+            int extraPause = pauseMinMs + (range > 0 ? random.nextInt(range + 1) : 0);
+            delay += extraPause;
+        }
+
+        return delay;
+    }
+
+    private void scheduleNextTap() {
+        if (tapping) {
+            handler.postDelayed(this::performNextTap, nextDelayMs());
+        }
     }
 
     private void performNextTap() {
@@ -68,25 +112,19 @@ public class RapidTapAccessibilityService extends AccessibilityService {
             @Override
             public void onCompleted(GestureDescription gestureDescription) {
                 gestureInFlight = false;
-                if (tapping) {
-                    handler.postDelayed(RapidTapAccessibilityService.this::performNextTap, intervalMs);
-                }
+                scheduleNextTap();
             }
 
             @Override
             public void onCancelled(GestureDescription gestureDescription) {
                 gestureInFlight = false;
-                if (tapping) {
-                    handler.postDelayed(RapidTapAccessibilityService.this::performNextTap, intervalMs);
-                }
+                scheduleNextTap();
             }
         }, null);
 
         if (!accepted) {
             gestureInFlight = false;
-            if (tapping) {
-                handler.postDelayed(this::performNextTap, intervalMs);
-            }
+            scheduleNextTap();
         }
     }
 
@@ -103,7 +141,6 @@ public class RapidTapAccessibilityService extends AccessibilityService {
     @Override
     public void onDestroy() {
         stopRapidTapping();
-        gestureInFlight = false;
         if (instance == this) instance = null;
         super.onDestroy();
     }
