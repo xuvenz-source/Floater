@@ -25,6 +25,10 @@ public class MainActivity extends Activity {
     private TextView permissionStatus;
     private TextView targetText;
     private EditText intervalInput;
+    private EditText variationInput;
+    private EditText pauseChanceInput;
+    private EditText pauseMinInput;
+    private EditText pauseMaxInput;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -55,7 +59,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView intro = new TextView(this);
-        intro.setText("Choose one screen target, then use a small floating button. Tap ▶ once to start rapid tapping; tap ■ to stop. Drag the button to move it.");
+        intro.setText("Tap ▶ once to start. Touch anywhere else to pause. While paused, double-tap the floating button to choose a new target. Drag the button to move it.");
         intro.setTextSize(16);
         intro.setTextColor(Color.DKGRAY);
         intro.setPadding(0, 0, 0, dp(14));
@@ -91,31 +95,51 @@ public class MainActivity extends Activity {
                 requestOverlayPermission();
                 return;
             }
-            saveInterval();
+            saveSettings();
             startFloatingService(FloatingButtonService.ACTION_PICK_TARGET);
         });
         root.addView(target, buttonParams());
 
-        TextView intervalLabel = new TextView(this);
-        intervalLabel.setText("Tap interval (milliseconds)");
-        intervalLabel.setTextSize(16);
-        intervalLabel.setTextColor(Color.BLACK);
+        SharedPreferences saved = getSharedPreferences(PREFS, MODE_PRIVATE);
+
+        TextView intervalLabel = label("Base tap interval (milliseconds)");
         intervalLabel.setPadding(0, dp(16), 0, dp(4));
         root.addView(intervalLabel, matchWrap());
 
-        intervalInput = new EditText(this);
-        intervalInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-        int savedInterval = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("interval", 75);
-        intervalInput.setText(String.valueOf(savedInterval));
-        intervalInput.setHint("75");
+        intervalInput = numberField(saved.getInt("interval", 75), "75");
         root.addView(intervalInput, matchWrap());
 
-        TextView hint = new TextView(this);
-        hint.setText("Recommended: 50–100 ms. Allowed range: 30–1000 ms.");
-        hint.setTextSize(14);
-        hint.setTextColor(Color.GRAY);
-        hint.setPadding(0, dp(4), 0, dp(14));
-        root.addView(hint, matchWrap());
+        TextView intervalHint = hint("Recommended: 50–100 ms. Allowed range: 30–1000 ms.");
+        root.addView(intervalHint, matchWrap());
+
+        TextView rhythmTitle = new TextView(this);
+        rhythmTitle.setText("Optional rhythm variation");
+        rhythmTitle.setTextSize(19);
+        rhythmTitle.setTextColor(Color.BLACK);
+        rhythmTitle.setPadding(0, dp(18), 0, dp(6));
+        root.addView(rhythmTitle, matchWrap());
+
+        TextView rhythmHint = hint("These settings just make the tapping rhythm less mechanically uniform. Set variation and pause chance to 0 for the original fixed rhythm.");
+        root.addView(rhythmHint, matchWrap());
+
+        root.addView(label("Timing variation (± milliseconds)"), matchWrap());
+        variationInput = numberField(saved.getInt("timing_variation", 0), "0");
+        root.addView(variationInput, matchWrap());
+        root.addView(hint("Example: 75 ms base + 10 ms variation produces roughly 65–85 ms gaps."), matchWrap());
+
+        root.addView(label("Occasional pause chance (%)"), matchWrap());
+        pauseChanceInput = numberField(saved.getInt("pause_chance", 0), "0");
+        root.addView(pauseChanceInput, matchWrap());
+        root.addView(hint("0 disables pauses. Allowed range: 0–50%."), matchWrap());
+
+        root.addView(label("Pause length minimum (ms)"), matchWrap());
+        pauseMinInput = numberField(saved.getInt("pause_min", 150), "150");
+        root.addView(pauseMinInput, matchWrap());
+
+        root.addView(label("Pause length maximum (ms)"), matchWrap());
+        pauseMaxInput = numberField(saved.getInt("pause_max", 450), "450");
+        root.addView(pauseMaxInput, matchWrap());
+        root.addView(hint("Allowed pause range: 0–5000 ms."), matchWrap());
 
         Button show = button("4. Show floating toggle");
         show.setOnClickListener(v -> {
@@ -128,9 +152,11 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "Set a target first.", Toast.LENGTH_SHORT).show();
                 return;
             }
-            saveInterval();
+            saveSettings();
             startFloatingService(FloatingButtonService.ACTION_SHOW);
-            Toast.makeText(this, "Tap ▶ to start, ■ to stop. Drag the circle to move it.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this,
+                    "Single tap ▶ to start; touch elsewhere to pause; double-tap ▶ to retarget.",
+                    Toast.LENGTH_LONG).show();
         });
         root.addView(show, buttonParams());
 
@@ -182,14 +208,34 @@ public class MainActivity extends Activity {
         return false;
     }
 
-    private void saveInterval() {
-        int value = 75;
+    private void saveSettings() {
+        int interval = readClamped(intervalInput, 75, 30, 1000);
+        int variation = readClamped(variationInput, 0, 0, 500);
+        int pauseChance = readClamped(pauseChanceInput, 0, 0, 50);
+        int pauseMin = readClamped(pauseMinInput, 150, 0, 5000);
+        int pauseMax = readClamped(pauseMaxInput, 450, 0, 5000);
+        if (pauseMax < pauseMin) {
+            pauseMax = pauseMin;
+            pauseMaxInput.setText(String.valueOf(pauseMax));
+        }
+
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                .putInt("interval", interval)
+                .putInt("timing_variation", variation)
+                .putInt("pause_chance", pauseChance)
+                .putInt("pause_min", pauseMin)
+                .putInt("pause_max", pauseMax)
+                .apply();
+    }
+
+    private int readClamped(EditText field, int fallback, int min, int max) {
+        int value = fallback;
         try {
-            value = Integer.parseInt(intervalInput.getText().toString().trim());
+            value = Integer.parseInt(field.getText().toString().trim());
         } catch (Exception ignored) { }
-        value = Math.max(30, Math.min(1000, value));
-        intervalInput.setText(String.valueOf(value));
-        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putInt("interval", value).apply();
+        value = Math.max(min, Math.min(max, value));
+        field.setText(String.valueOf(value));
+        return value;
     }
 
     private void requestOverlayPermission() {
@@ -215,6 +261,32 @@ public class MainActivity extends Activity {
         b.setAllCaps(false);
         b.setTextSize(16);
         return b;
+    }
+
+    private TextView label(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(16);
+        t.setTextColor(Color.BLACK);
+        t.setPadding(0, dp(10), 0, dp(4));
+        return t;
+    }
+
+    private TextView hint(String text) {
+        TextView t = new TextView(this);
+        t.setText(text);
+        t.setTextSize(14);
+        t.setTextColor(Color.GRAY);
+        t.setPadding(0, dp(3), 0, dp(8));
+        return t;
+    }
+
+    private EditText numberField(int value, String hint) {
+        EditText e = new EditText(this);
+        e.setInputType(InputType.TYPE_CLASS_NUMBER);
+        e.setText(String.valueOf(value));
+        e.setHint(hint);
+        return e;
     }
 
     private LinearLayout.LayoutParams buttonParams() {
