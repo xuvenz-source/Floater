@@ -38,6 +38,7 @@ public class FloatingButtonService extends Service {
 
     private final Handler uiHandler = new Handler(Looper.getMainLooper());
     private Runnable pendingSingleTap;
+    private Runnable pendingAutoResume;
     private WindowManager windowManager;
     private TextView floatingButton;
     private View pickerView;
@@ -64,6 +65,7 @@ public class FloatingButtonService extends Service {
         String action = intent != null ? intent.getAction() : ACTION_SHOW;
         if (ACTION_HIDE.equals(action)) {
             cancelPendingSingleTap();
+            cancelAutoResume();
             stopRapidTap();
             removeFloatingView();
             removePicker();
@@ -72,6 +74,7 @@ public class FloatingButtonService extends Service {
         }
         if (ACTION_PICK_TARGET.equals(action)) {
             cancelPendingSingleTap();
+            cancelAutoResume();
             stopRapidTap();
             showTargetPicker();
             return START_STICKY;
@@ -126,13 +129,20 @@ public class FloatingButtonService extends Service {
             public boolean onTouch(View v, MotionEvent event) {
                 switch (event.getActionMasked()) {
                     case MotionEvent.ACTION_OUTSIDE:
-                        if (tapping && !paused) {
+                        if (tapping) {
                             RapidTapAccessibilityService acc =
                                     RapidTapAccessibilityService.getInstance();
-                            if (acc != null && !acc.isDispatchingGesture()) {
+
+                            if (!paused && acc != null && !acc.isDispatchingGesture()) {
                                 acc.pauseRapidTapping();
-                                paused = true;
-                                updateButtonAppearance();
+                                if (acc.isPaused()) {
+                                    paused = true;
+                                    updateButtonAppearance();
+                                }
+                            }
+
+                            if (paused) {
+                                scheduleAutoResume();
                             }
                         }
                         return true;
@@ -145,6 +155,12 @@ public class FloatingButtonService extends Service {
                         moved = false;
                         wasRunningAtDown = tapping && !paused;
 
+                        // A deliberate interaction with the paused control should
+                        // always take priority over a pending timed resume.
+                        if (tapping && paused) {
+                            cancelAutoResume();
+                        }
+
                         if (!wasRunningAtDown &&
                                 lastTapUpAt > 0 &&
                                 SystemClock.uptimeMillis() - lastTapUpAt <= DOUBLE_TAP_MS) {
@@ -156,6 +172,7 @@ public class FloatingButtonService extends Service {
                         // double tap can retarget.
                         if (wasRunningAtDown) {
                             cancelPendingSingleTap();
+                            cancelAutoResume();
                             stopRapidTap();
                             updateButtonAppearance();
                         }
@@ -167,6 +184,7 @@ public class FloatingButtonService extends Service {
                         if (!moved && (Math.abs(dx) > slop || Math.abs(dy) > slop)) {
                             moved = true;
                             cancelPendingSingleTap();
+                            cancelAutoResume();
                             lastTapUpAt = 0;
                         }
                         if (moved) {
@@ -188,6 +206,7 @@ public class FloatingButtonService extends Service {
                             long now = SystemClock.uptimeMillis();
                             if (lastTapUpAt > 0 && now - lastTapUpAt <= DOUBLE_TAP_MS) {
                                 cancelPendingSingleTap();
+                                cancelAutoResume();
                                 lastTapUpAt = 0;
                                 showTargetPicker();
                             } else {
@@ -224,6 +243,8 @@ public class FloatingButtonService extends Service {
     }
 
     private void startRapidTap() {
+        cancelAutoResume();
+
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         if (!prefs.contains("target_x") || !prefs.contains("target_y")) {
             Toast.makeText(this, "Set a target in Rapid Tap Toggle first.", Toast.LENGTH_SHORT).show();
@@ -257,6 +278,8 @@ public class FloatingButtonService extends Service {
     }
 
     private void resumeRapidTap() {
+        cancelAutoResume();
+
         RapidTapAccessibilityService acc = RapidTapAccessibilityService.getInstance();
         if (acc == null) {
             Toast.makeText(this, "Enable Rapid Tap Toggle in Accessibility first.", Toast.LENGTH_LONG).show();
@@ -272,10 +295,38 @@ public class FloatingButtonService extends Service {
     }
 
     private void stopRapidTap() {
+        cancelAutoResume();
         RapidTapAccessibilityService acc = RapidTapAccessibilityService.getInstance();
         if (acc != null) acc.stopRapidTapping();
         tapping = false;
         paused = false;
+    }
+
+    private void scheduleAutoResume() {
+        cancelAutoResume();
+        if (!tapping || !paused) return;
+
+        SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        if (!prefs.getBoolean("auto_resume_enabled", false)) return;
+
+        int delayMs = prefs.getInt("auto_resume_delay", 750);
+        delayMs = Math.max(250, Math.min(5000, delayMs));
+
+        pendingAutoResume = () -> {
+            pendingAutoResume = null;
+            if (tapping && paused && pickerView == null) {
+                resumeRapidTap();
+                updateButtonAppearance();
+            }
+        };
+        uiHandler.postDelayed(pendingAutoResume, delayMs);
+    }
+
+    private void cancelAutoResume() {
+        if (pendingAutoResume != null) {
+            uiHandler.removeCallbacks(pendingAutoResume);
+            pendingAutoResume = null;
+        }
     }
 
     private void cancelPendingSingleTap() {
@@ -305,6 +356,7 @@ public class FloatingButtonService extends Service {
 
     private void showTargetPicker() {
         cancelPendingSingleTap();
+        cancelAutoResume();
         stopRapidTap();
         updateButtonAppearance();
         removePicker();
@@ -423,6 +475,7 @@ public class FloatingButtonService extends Service {
 
     private void removeFloatingView() {
         cancelPendingSingleTap();
+        cancelAutoResume();
         if (floatingButton != null) {
             try {
                 windowManager.removeView(floatingButton);
@@ -443,6 +496,7 @@ public class FloatingButtonService extends Service {
     @Override
     public void onDestroy() {
         cancelPendingSingleTap();
+        cancelAutoResume();
         stopRapidTap();
         removePicker();
         removeFloatingView();
