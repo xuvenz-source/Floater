@@ -13,6 +13,7 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -29,6 +30,8 @@ public class MainActivity extends Activity {
     private EditText pauseChanceInput;
     private EditText pauseMinInput;
     private EditText pauseMaxInput;
+    private CheckBox autoResumeCheck;
+    private EditText autoResumeDelayInput;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,7 +62,7 @@ public class MainActivity extends Activity {
         root.addView(title, matchWrap());
 
         TextView intro = new TextView(this);
-        intro.setText("Tap ▶ once to start. Touch anywhere else to pause. While paused, double-tap the floating button to choose a new target. Drag the button to move it.");
+        intro.setText("Tap ▶ once to start. Touch anywhere else to pause. While paused, single-tap Ⅱ to resume or double-tap it to choose a new target. Drag the button to move it.");
         intro.setTextSize(16);
         intro.setTextColor(Color.DKGRAY);
         intro.setPadding(0, 0, 0, dp(14));
@@ -141,6 +144,27 @@ public class MainActivity extends Activity {
         root.addView(pauseMaxInput, matchWrap());
         root.addView(hint("Allowed pause range: 0–5000 ms."), matchWrap());
 
+        TextView smartPauseTitle = new TextView(this);
+        smartPauseTitle.setText("Smart Pause");
+        smartPauseTitle.setTextSize(19);
+        smartPauseTitle.setTextColor(Color.BLACK);
+        smartPauseTitle.setPadding(0, dp(18), 0, dp(6));
+        root.addView(smartPauseTitle, matchWrap());
+
+        root.addView(hint("Touching anywhere outside the floating button pauses rapid tapping. On Android 10, optional auto-resume uses a timer because the overlay cannot reliably see when your finger is released."), matchWrap());
+
+        autoResumeCheck = new CheckBox(this);
+        autoResumeCheck.setText("Auto resume after Smart Pause");
+        autoResumeCheck.setTextSize(16);
+        autoResumeCheck.setTextColor(Color.BLACK);
+        autoResumeCheck.setChecked(saved.getBoolean("auto_resume_enabled", false));
+        root.addView(autoResumeCheck, matchWrap());
+
+        root.addView(label("Auto resume delay (ms)"), matchWrap());
+        autoResumeDelayInput = numberField(saved.getInt("auto_resume_delay", 750), "750");
+        root.addView(autoResumeDelayInput, matchWrap());
+        root.addView(hint("Allowed range: 250–5000 ms. The timer starts when Smart Pause detects your touch. If you hold longer than this delay, tapping can resume before you release. 750–1000 ms is a reasonable starting point."), matchWrap());
+
         Button show = button("4. Show floating toggle");
         show.setOnClickListener(v -> {
             if (!Settings.canDrawOverlays(this)) {
@@ -155,7 +179,7 @@ public class MainActivity extends Activity {
             saveSettings();
             startFloatingService(FloatingButtonService.ACTION_SHOW);
             Toast.makeText(this,
-                    "Single tap ▶ to start; touch elsewhere to pause; double-tap ▶ to retarget.",
+                    "Single tap ▶ to start; touch elsewhere to pause; double-tap a paused button to retarget.",
                     Toast.LENGTH_LONG).show();
         });
         root.addView(show, buttonParams());
@@ -214,6 +238,7 @@ public class MainActivity extends Activity {
         int pauseChance = readClamped(pauseChanceInput, 0, 0, 50);
         int pauseMin = readClamped(pauseMinInput, 150, 0, 5000);
         int pauseMax = readClamped(pauseMaxInput, 450, 0, 5000);
+        int autoResumeDelay = readClamped(autoResumeDelayInput, 750, 250, 5000);
         if (pauseMax < pauseMin) {
             pauseMax = pauseMin;
             pauseMaxInput.setText(String.valueOf(pauseMax));
@@ -225,6 +250,8 @@ public class MainActivity extends Activity {
                 .putInt("pause_chance", pauseChance)
                 .putInt("pause_min", pauseMin)
                 .putInt("pause_max", pauseMax)
+                .putBoolean("auto_resume_enabled", autoResumeCheck.isChecked())
+                .putInt("auto_resume_delay", autoResumeDelay)
                 .apply();
     }
 
