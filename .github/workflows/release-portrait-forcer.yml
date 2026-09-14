@@ -1,0 +1,47 @@
+name: Release Portrait Forcer APK
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/release-portrait-forcer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Portrait Forcer branch
+        uses: actions/checkout@v4
+        with:
+          ref: force-portrait-app
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build APK
+        working-directory: portrait-forcer
+        run: gradle assembleDebug
+
+      - name: Prepare release asset
+        run: cp portrait-forcer/app/build/outputs/apk/debug/app-debug.apk Portrait-Forcer-v1.0.apk
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create portrait-forcer-v1.0 Portrait-Forcer-v1.0.apk \
+            --repo ${{ github.repository }} \
+            --target force-portrait-app \
+            --title "Portrait Forcer v1.0" \
+            --notes "Android APK for Portrait Forcer. Download Portrait-Forcer-v1.0.apk directly and install it on your Android device."
