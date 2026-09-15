@@ -10,160 +10,34 @@ import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.graphics.PixelFormat;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
 
 public class OrientationService extends Service {
-    public static final String ACTION_ENABLE = "com.xuvenz.portraitforcer.ENABLE";
-    public static final String ACTION_DISABLE = "com.xuvenz.portraitforcer.DISABLE";
+    public static final String ACTION_ENABLE="com.xuvenz.portraitforcer.ENABLE";
+    public static final String ACTION_ENABLE_STRONG="com.xuvenz.portraitforcer.ENABLE_STRONG";
+    public static final String ACTION_DISABLE="com.xuvenz.portraitforcer.DISABLE";
+    private static final String CHANNEL_ID="portrait_forcer"; private static final int NOTIFICATION_ID=42;
+    private WindowManager wm; private View overlay; private int oldAuto=1,oldRotation=0; private boolean saved=false,strong=false;
+    private final Handler handler=new Handler(Looper.getMainLooper());
+    private final Runnable reassert=new Runnable(){public void run(){if(strong){applySystemPortrait();refreshOverlay();handler.postDelayed(this,750);}}};
 
-    private static final String CHANNEL_ID = "portrait_forcer";
-    private static final int NOTIFICATION_ID = 42;
-
-    private WindowManager windowManager;
-    private View orientationOverlay;
-    private int previousAccelerometerRotation = 1;
-    private int previousUserRotation = 0;
-    private boolean savedSystemRotation = false;
-
-    @Override
-    public void onCreate() {
-        super.onCreate();
-        windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
-        createNotificationChannel();
-    }
-
-    @Override
-    public int onStartCommand(Intent intent, int flags, int startId) {
-        String action = intent == null ? ACTION_ENABLE : intent.getAction();
-        if (ACTION_DISABLE.equals(action)) {
-            disablePortrait();
-            stopForeground(true);
-            stopSelf();
-            return START_NOT_STICKY;
-        }
-
-        startForeground(NOTIFICATION_ID, buildNotification());
-        enablePortrait();
-        return START_STICKY;
-    }
-
-    private void enablePortrait() {
-        if (orientationOverlay != null) return;
-
-        if (Settings.System.canWrite(this)) {
-            try {
-                previousAccelerometerRotation = Settings.System.getInt(
-                        getContentResolver(), Settings.System.ACCELEROMETER_ROTATION, 1);
-                previousUserRotation = Settings.System.getInt(
-                        getContentResolver(), Settings.System.USER_ROTATION, 0);
-                savedSystemRotation = true;
-                Settings.System.putInt(getContentResolver(), Settings.System.ACCELEROMETER_ROTATION, 0);
-                Settings.System.putInt(getContentResolver(), Settings.System.USER_ROTATION, 0);
-            } catch (Exception ignored) {
-            }
-        }
-
-        orientationOverlay = new View(this);
-        orientationOverlay.setBackgroundColor(0x00000000);
-
-        int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                : WindowManager.LayoutParams.TYPE_PHONE;
-
-        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
-                1,
-                1,
-                type,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
-                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
-                PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.TOP | Gravity.START;
-        params.x = 0;
-        params.y = 0;
-        params.screenOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;
-
-        try {
-            windowManager.addView(orientationOverlay, params);
-        } catch (Exception e) {
-            orientationOverlay = null;
-        }
-    }
-
-    private void disablePortrait() {
-        if (orientationOverlay != null) {
-            try {
-                windowManager.removeView(orientationOverlay);
-            } catch (Exception ignored) {
-            }
-            orientationOverlay = null;
-        }
-
-        if (savedSystemRotation && Settings.System.canWrite(this)) {
-            try {
-                Settings.System.putInt(getContentResolver(), Settings.System.ACCELEROMETER_ROTATION,
-                        previousAccelerometerRotation);
-                Settings.System.putInt(getContentResolver(), Settings.System.USER_ROTATION,
-                        previousUserRotation);
-            } catch (Exception ignored) {
-            }
-        }
-        savedSystemRotation = false;
-    }
-
-    private Notification buildNotification() {
-        Intent openIntent = new Intent(this, MainActivity.class);
-        PendingIntent openPending = PendingIntent.getActivity(
-                this, 0, openIntent,
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-
-        Intent disableIntent = new Intent(this, OrientationService.class);
-        disableIntent.setAction(ACTION_DISABLE);
-        PendingIntent disablePending = PendingIntent.getService(
-                this, 1, disableIntent,
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.M ? PendingIntent.FLAG_IMMUTABLE : 0);
-
-        Notification.Builder builder = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                ? new Notification.Builder(this, CHANNEL_ID)
-                : new Notification.Builder(this);
-
-        return builder
-                .setSmallIcon(android.R.drawable.ic_lock_idle_lock)
-                .setContentTitle("Portrait Forcer active")
-                .setContentText("Games are being forced toward portrait orientation")
-                .setContentIntent(openPending)
-                .setOngoing(true)
-                .addAction(new Notification.Action.Builder(
-                        android.R.drawable.ic_menu_revert,
-                        "Restore rotation",
-                        disablePending).build())
-                .build();
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Portrait Forcer",
-                    NotificationManager.IMPORTANCE_LOW);
-            channel.setDescription("Keeps the portrait orientation controller running");
-            NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-            manager.createNotificationChannel(channel);
-        }
-    }
-
-    @Override
-    public void onDestroy() {
-        disablePortrait();
-        super.onDestroy();
-    }
-
-    @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    @Override public void onCreate(){super.onCreate();wm=(WindowManager)getSystemService(WINDOW_SERVICE);createChannel();}
+    @Override public int onStartCommand(Intent i,int flags,int id){String a=i==null?ACTION_ENABLE:i.getAction();if(ACTION_DISABLE.equals(a)){disable();stopForeground(true);stopSelf();return START_NOT_STICKY;} strong=ACTION_ENABLE_STRONG.equals(a);startForeground(NOTIFICATION_ID,notification());enable();return START_STICKY;}
+    private void enable(){saveRotation();applySystemPortrait();addOverlay();handler.removeCallbacks(reassert);if(strong)handler.post(reassert);}
+    private void saveRotation(){if(saved||!Settings.System.canWrite(this))return;try{oldAuto=Settings.System.getInt(getContentResolver(),Settings.System.ACCELEROMETER_ROTATION,1);oldRotation=Settings.System.getInt(getContentResolver(),Settings.System.USER_ROTATION,0);saved=true;}catch(Exception ignored){}}
+    private void applySystemPortrait(){if(Settings.System.canWrite(this))try{Settings.System.putInt(getContentResolver(),Settings.System.ACCELEROMETER_ROTATION,0);Settings.System.putInt(getContentResolver(),Settings.System.USER_ROTATION,0);}catch(Exception ignored){}}
+    private WindowManager.LayoutParams params(){int type=Build.VERSION.SDK_INT>=26?WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY:WindowManager.LayoutParams.TYPE_PHONE;WindowManager.LayoutParams p=new WindowManager.LayoutParams(1,1,type,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE|WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,PixelFormat.TRANSLUCENT);p.gravity=Gravity.TOP|Gravity.START;p.screenOrientation=ActivityInfo.SCREEN_ORIENTATION_PORTRAIT;return p;}
+    private void addOverlay(){if(overlay!=null)return;overlay=new View(this);overlay.setBackgroundColor(0x00000000);try{wm.addView(overlay,params());}catch(Exception e){overlay=null;}}
+    private void refreshOverlay(){if(overlay==null){addOverlay();return;}try{wm.updateViewLayout(overlay,params());}catch(Exception ignored){}}
+    private void disable(){strong=false;handler.removeCallbacks(reassert);if(overlay!=null)try{wm.removeView(overlay);}catch(Exception ignored){}overlay=null;if(saved&&Settings.System.canWrite(this))try{Settings.System.putInt(getContentResolver(),Settings.System.ACCELEROMETER_ROTATION,oldAuto);Settings.System.putInt(getContentResolver(),Settings.System.USER_ROTATION,oldRotation);}catch(Exception ignored){}saved=false;}
+    private Notification notification(){Intent open=new Intent(this,MainActivity.class);PendingIntent op=PendingIntent.getActivity(this,0,open,Build.VERSION.SDK_INT>=23?PendingIntent.FLAG_IMMUTABLE:0);Intent off=new Intent(this,OrientationService.class);off.setAction(ACTION_DISABLE);PendingIntent dp=PendingIntent.getService(this,1,off,Build.VERSION.SDK_INT>=23?PendingIntent.FLAG_IMMUTABLE:0);Notification.Builder b=Build.VERSION.SDK_INT>=26?new Notification.Builder(this,CHANNEL_ID):new Notification.Builder(this);return b.setSmallIcon(android.R.drawable.ic_lock_idle_lock).setContentTitle(strong?"True Portrait active":"Portrait Forcer active").setContentText(strong?"Reasserting portrait for Skylore":"Compatibility portrait active").setContentIntent(op).setOngoing(true).addAction(new Notification.Action.Builder(android.R.drawable.ic_menu_revert,"Restore display",dp).build()).build();}
+    private void createChannel(){if(Build.VERSION.SDK_INT>=26){NotificationChannel c=new NotificationChannel(CHANNEL_ID,"Portrait Forcer",NotificationManager.IMPORTANCE_LOW);((NotificationManager)getSystemService(Context.NOTIFICATION_SERVICE)).createNotificationChannel(c);}}
+    @Override public void onDestroy(){disable();super.onDestroy();}
+    @Override public IBinder onBind(Intent i){return null;}
 }
