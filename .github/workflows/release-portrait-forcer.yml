@@ -26,13 +26,13 @@ jobs:
       - name: Build APK
         run: gradle -p portrait-forcer assembleDebug --stacktrace
       - name: Prepare APK
-        run: cp portrait-forcer/app/build/outputs/apk/debug/app-debug.apk Portrait-Forcer-v1.1.apk
-      - name: Publish v1.1
+        run: cp portrait-forcer/app/build/outputs/apk/debug/app-debug.apk Portrait-Forcer-v1.2.apk
+      - name: Publish v1.2
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create portrait-forcer-v1.1 Portrait-Forcer-v1.1.apk \
+          gh release create portrait-forcer-v1.2 Portrait-Forcer-v1.2.apk \
             --repo ${{ github.repository }} \
             --target main \
-            --title "Portrait Forcer v1.1 — Skylore test" \
-            --notes "Adds True Portrait mode for Skylore, which continuously reasserts Android portrait orientation, plus the original compatibility mode. This is the strongest normal-app method; it cannot directly resize another game's framebuffer."
+            --title "Portrait Forcer v1.2 — Shizuku lab" \
+            --notes "Android 10 Shizuku experiment for Skylore. Includes resizable/task-bounds and temporary logical-display modes, diagnostics, saved settings, and prominent restoration controls. Android cannot directly stretch another app's Surface."

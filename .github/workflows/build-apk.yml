@@ -148,20 +148,3 @@ jobs:
           name: RapidTapToggle-Release-APK
           path: app/build/outputs/apk/release/RapidTapToggle-release.apk
           if-no-files-found: error
-
-      - name: Build Portrait Forcer APK
-        working-directory: portrait-forcer
-        run: gradle --no-daemon assembleDebug
-
-      - name: Prepare Portrait Forcer release APK
-        run: cp portrait-forcer/app/build/outputs/apk/debug/app-debug.apk Portrait-Forcer-v1.0.apk
-
-      - name: Publish Portrait Forcer GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create portrait-forcer-v1.0 Portrait-Forcer-v1.0.apk \
-            --repo ${{ github.repository }} \
-            --target main \
-            --title "Portrait Forcer v1.0" \
-            --notes "Android APK for Portrait Forcer. Download Portrait-Forcer-v1.0.apk directly and install it on your Android device."
