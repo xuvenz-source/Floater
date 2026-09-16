@@ -10,7 +10,7 @@ android {
         applicationId 'com.xuvenz.portraitforcer'
         minSdk 23
         targetSdk 28
-        versionCode 3
+        versionCode 4
         versionName '1.2'
     }
 }
